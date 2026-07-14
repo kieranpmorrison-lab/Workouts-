@@ -399,8 +399,10 @@
             border: 1px solid var(--border); background: var(--bg-tertiary);
             color: var(--text-primary); font-size: 0.7rem; text-align: center;
         }
-        .set-rep-input:focus { outline: none; border-color: var(--accent); }
+        .set-rep-input:focus { outline: none; border-color: var(--accent); color: var(--text-primary); }
         .set-rep-input.is-default { color: var(--text-muted); font-style: italic; }
+        /* When focused, always show as active white text even if still on default */
+        .set-rep-input.is-default:focus { color: var(--text-primary); font-style: normal; }
 
         .exercise-history {
             margin-top: 6px; font-size: 0.68rem; color: var(--text-muted);
@@ -427,6 +429,20 @@
         }
         .save-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
         .save-toast::before { content: '✓'; font-size: 0.9rem; }
+
+        .version-tag {
+            position: fixed; bottom: 6px; right: 8px; font-size: 0.6rem;
+            color: var(--text-muted); opacity: 0.5; z-index: 100; pointer-events: none;
+        }
+
+        .day-save-btn {
+            display: block; width: 100%; margin-top: 14px; padding: 12px;
+            border: none; border-radius: 10px; background: var(--green);
+            color: #04210f; font-weight: 700; font-size: 0.9rem; cursor: pointer;
+            transition: transform 0.1s, background 0.15s;
+        }
+        .day-save-btn:active { transform: scale(0.98); }
+        .day-save-btn.done { background: var(--bg-tertiary); color: var(--green); border: 1px solid var(--green); }
 
         .exercise-section {
             font-size: 0.75rem;
@@ -679,6 +695,7 @@
 </head>
 <body>
     <div class="save-toast" id="save-toast">Saved</div>
+    <div class="version-tag">v4 · reps+history+save</div>
     <div class="header">
         <div class="header-content">
             <h1>12-Week Recomp</h1>
@@ -1261,7 +1278,6 @@
         function saveState(showToast) {
             try {
                 localStorage.setItem('trainingPlan12Week_v2', JSON.stringify(state));
-                // verify the write actually landed
                 const check = localStorage.getItem('trainingPlan12Week_v2');
                 if (!check) throw new Error('write did not persist');
                 if (showToast) showSavedToast();
@@ -1422,6 +1438,7 @@
                     '</div>' +
                     '<div class="day-card-body">' +
                         renderExercises(day.exercises, dayKey) +
+                        '<button class="day-save-btn" data-day-save="' + dayKey + '">Save &amp; Finish Workout</button>' +
                     '</div>';
 
                 const header = card.querySelector('.day-card-header');
@@ -1470,7 +1487,6 @@
                 }
                 wk = getPreviousWeek(wk);
             }
-            // No prior data at all
             if (getPreviousWeek(state.currentWeek) === null) return '';
             return '<div class="exercise-history empty"><span class="eh-label">Last time</span><span class="eh-set">no data logged yet</span></div>';
         }
@@ -1528,12 +1544,21 @@
                 check.addEventListener('click', function(e) {
                     e.stopPropagation();
                     const key = this.dataset.setKey;
+                    const repInput = this.parentElement.querySelector('.set-rep-input');
                     if (state.completedSets[key]) {
                         delete state.completedSets[key];
                         this.classList.remove('checked');
                     } else {
                         state.completedSets[key] = true;
                         this.classList.add('checked');
+                        // Turn the rep text solid white and lock in whatever value is shown
+                        if (repInput) {
+                            repInput.classList.remove('is-default');
+                            const rKey = repInput.dataset.repKey;
+                            if (state.setReps[rKey] === undefined || state.setReps[rKey] === '') {
+                                state.setReps[rKey] = repInput.value;
+                            }
+                        }
                     }
                     saveState(true);
                     updateStats();
@@ -1563,14 +1588,24 @@
 
             document.querySelectorAll('.set-rep-input').forEach(input => {
                 input.addEventListener('click', function(e) { e.stopPropagation(); });
-                // Turn white as soon as the user types anything (fixes the "stays gray" issue)
+                // On focus: turn white immediately. If it's still the untouched default,
+                // clear the box so the user types on a clean white field.
+                input.addEventListener('focus', function() {
+                    this.classList.remove('is-default');
+                    const key = this.dataset.repKey;
+                    if (state.setReps[key] === undefined || state.setReps[key] === '') {
+                        this.value = '';
+                    }
+                });
+                // Stay white while typing
                 input.addEventListener('input', function() {
                     this.classList.remove('is-default');
                 });
-                input.addEventListener('change', function() {
+                input.addEventListener('blur', function() {
                     const key = this.dataset.repKey;
                     const def = this.dataset.defaultRep;
                     const val = this.value.trim();
+                    // If left empty, restore the greyed default
                     if (val === '' || val === def) {
                         delete state.setReps[key];
                         this.value = def;
@@ -1579,7 +1614,7 @@
                         state.setReps[key] = val;
                         this.classList.remove('is-default');
                     }
-                    if (val !== '') {
+                    if (val !== '' && val !== def) {
                         const exIdx = this.dataset.exIdx;
                         const thisSet = parseInt(this.dataset.setIdx, 10);
                         const row = this.closest('.exercise-item');
@@ -1587,20 +1622,26 @@
                             if (other.dataset.repKey === key) return;
                             if (other.dataset.exIdx !== exIdx) return;
                             if (parseInt(other.dataset.setIdx, 10) <= thisSet) return;
-                            const oKey = other.dataset.repKey;
-                            const oDef = other.dataset.defaultRep;
-                            if (val === oDef) {
-                                delete state.setReps[oKey];
-                                other.value = oDef;
-                                other.classList.add('is-default');
-                            } else {
-                                state.setReps[oKey] = val;
-                                other.value = val;
-                                other.classList.remove('is-default');
-                            }
+                            state.setReps[other.dataset.repKey] = val;
+                            other.value = val;
+                            other.classList.remove('is-default');
                         });
                     }
                     saveState(true);
+                });
+            });
+
+            document.querySelectorAll('.day-save-btn').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    saveState(true);
+                    this.classList.add('done');
+                    this.textContent = '✓ Saved';
+                    const self = this;
+                    setTimeout(() => {
+                        self.classList.remove('done');
+                        self.innerHTML = 'Save &amp; Finish Workout';
+                    }, 2000);
                 });
             });
         }
