@@ -400,7 +400,7 @@
             color: var(--text-primary); font-size: 0.7rem; text-align: center;
         }
         .set-rep-input:focus { outline: none; border-color: var(--accent); }
-        .set-rep-input.is-default { color: var(--text-muted); }
+        .set-rep-input.is-default { color: var(--text-muted); font-style: italic; }
 
         .exercise-history {
             margin-top: 6px; font-size: 0.68rem; color: var(--text-muted);
@@ -408,6 +408,7 @@
             border-radius: 4px; padding: 4px 8px; display: flex; flex-wrap: wrap;
             gap: 4px 10px; align-items: center;
         }
+        .exercise-history.empty { border-left-color: var(--border); opacity: 0.6; }
         .exercise-history .eh-label {
             text-transform: uppercase; font-weight: 700; font-size: 0.6rem;
             color: var(--blue); letter-spacing: 0.03em;
@@ -1231,7 +1232,7 @@
             currentWeek: 1,
             completedSets: {},   // key: "week-day-exerciseIdx-setIdx" -> true
             setWeights: {},      // key: "week-day-exerciseIdx-setIdx" -> "weight string"
-            setReps: {},         // key: "week-day-exerciseIdx-setIdx" -> "reps string" (stored only when edited)
+            setReps: {},         // key -> "reps string" (stored only when edited)
             bodyLog: [],
             prLog: [],
             runLog: [],
@@ -1243,23 +1244,36 @@
             if (saved) {
                 state = { ...state, ...JSON.parse(saved) };
             }
+            if (!state.setReps) state.setReps = {};
         }
 
         let _toastTimer = null;
         function showSavedToast() {
             const t = document.getElementById('save-toast');
             if (!t) return;
+            const stamp = new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+            t.textContent = 'Saved ' + stamp;
             t.classList.add('show');
             clearTimeout(_toastTimer);
-            _toastTimer = setTimeout(() => t.classList.remove('show'), 1100);
+            _toastTimer = setTimeout(() => t.classList.remove('show'), 1400);
         }
 
         function saveState(showToast) {
             try {
                 localStorage.setItem('trainingPlan12Week_v2', JSON.stringify(state));
+                // verify the write actually landed
+                const check = localStorage.getItem('trainingPlan12Week_v2');
+                if (!check) throw new Error('write did not persist');
                 if (showToast) showSavedToast();
             } catch (e) {
                 console.error('Save failed', e);
+                const t = document.getElementById('save-toast');
+                if (t) {
+                    t.textContent = '⚠ NOT saved - use Export!';
+                    t.style.background = '#ef4444';
+                    t.style.color = '#fff';
+                    t.classList.add('show');
+                }
             }
         }
 
@@ -1452,11 +1466,13 @@
                     }
                 }
                 if (hasData) {
-                    return '<div class="exercise-history"><span class="eh-label">Wk ' + wk + '</span>' + parts.join('') + '</div>';
+                    return '<div class="exercise-history"><span class="eh-label">Last (Wk ' + wk + ')</span>' + parts.join('') + '</div>';
                 }
                 wk = getPreviousWeek(wk);
             }
-            return '';
+            // No prior data at all
+            if (getPreviousWeek(state.currentWeek) === null) return '';
+            return '<div class="exercise-history empty"><span class="eh-label">Last time</span><span class="eh-set">no data logged yet</span></div>';
         }
 
         function renderExercises(exercises, dayKey) {
@@ -1530,9 +1546,6 @@
                 input.addEventListener('change', function() {
                     const key = this.dataset.weightKey;
                     state.setWeights[key] = this.value;
-
-                    // Cascade forward: fill every set AFTER this one with the same value.
-                    // Sets before this one are never touched.
                     if (this.value !== '') {
                         const exIdx = this.dataset.exIdx;
                         const thisSet = parseInt(this.dataset.setIdx, 10);
@@ -1550,12 +1563,14 @@
 
             document.querySelectorAll('.set-rep-input').forEach(input => {
                 input.addEventListener('click', function(e) { e.stopPropagation(); });
+                // Turn white as soon as the user types anything (fixes the "stays gray" issue)
+                input.addEventListener('input', function() {
+                    this.classList.remove('is-default');
+                });
                 input.addEventListener('change', function() {
                     const key = this.dataset.repKey;
                     const def = this.dataset.defaultRep;
                     const val = this.value.trim();
-
-                    // Empty or typing the default back = revert to greyed default (not stored)
                     if (val === '' || val === def) {
                         delete state.setReps[key];
                         this.value = def;
@@ -1564,8 +1579,6 @@
                         state.setReps[key] = val;
                         this.classList.remove('is-default');
                     }
-
-                    // Cascade forward for reps: fill every set AFTER this one.
                     if (val !== '') {
                         const exIdx = this.dataset.exIdx;
                         const thisSet = parseInt(this.dataset.setIdx, 10);
